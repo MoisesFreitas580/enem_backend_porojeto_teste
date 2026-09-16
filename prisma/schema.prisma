@@ -1,0 +1,553 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AreaCode {
+  LC
+  CH
+  CN
+  MT
+}
+
+enum BlockType {
+  TEXT
+  IMAGE
+}
+
+enum UserRole {
+  STUDENT
+  TEACHER
+  ADMIN
+}
+
+enum ValidationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/**
+ * ===================== INEP MICRODATA =====================
+ */
+
+enum ApplicationType {
+  REGULAR
+  PPL
+}
+
+enum ExamDay {
+  D1
+  D2
+}
+
+//Enum para a seção de Attempts (tentativas de respostas)
+
+enum AttemptSessionType {
+  AVULSO
+  SIMULATION
+  EXAM
+}
+
+enum AttemptSessionStatus {
+  IN_PROGRESS
+  CORRECTED
+  ABANDONED
+}
+
+enum AttemptCorrectionStatus {
+  PENDING
+  CORRECT
+  WRONG
+  SKIPPED
+  MISSING_ANSWER_KEY
+  ANNULLED
+}
+
+model InepItemMicrodata {
+  id BigInt @id @default(autoincrement())
+
+  // metadados do recorte (vem do nome do arquivo)
+  year        Int
+  application ApplicationType
+  day         ExamDay
+
+  // campos do INEP
+  coPosicao    Int
+  sgArea       String? @db.VarChar(5)
+  coItem       BigInt?
+  txGabarito   String? @db.VarChar(10)
+  coHabilidade Int?
+  inItemAban   Int?
+  txMotivoAban String?
+
+  nuParamA Decimal?
+  nuParamB Decimal?
+  nuParamC Decimal?
+
+  txCor          String? @db.VarChar(30)
+  coProva        BigInt?
+  tpLingua       Int?    @default(-1)
+  inItemAdaptado Int?
+
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  questions Question[]
+
+  @@unique([year, application, day, coProva, coPosicao, tpLingua], name: "ux_iteminep_key")
+  @@index([year, application, day, txCor, tpLingua, coPosicao])
+}
+
+/**
+ * ===================== PEDAGOGICAL STRUCTURE =====================
+ */
+
+model Area {
+  id   String   @id @default(uuid())
+  code AreaCode @unique
+  name String
+
+  disciplines  Discipline[]
+  competencies Competency[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Discipline {
+  id     String @id @default(uuid())
+  areaId String
+  name   String
+
+  area Area @relation(fields: [areaId], references: [id], onDelete: Restrict)
+
+  knowledgeObjects    KnowledgeObject[]
+  questionDisciplines QuestionDiscipline[]
+  aiSuggestedIn       AiClassification[]   @relation("AiSuggestedDiscipline")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([areaId, name])
+  @@index([areaId])
+}
+
+model KnowledgeObject {
+  id           String @id @default(uuid())
+  disciplineId String
+  name         String
+
+  discipline Discipline @relation(fields: [disciplineId], references: [id], onDelete: Restrict)
+
+  objectContents           ObjectContent[]
+  questionKnowledgeObjects QuestionKnowledgeObject[]
+  skillKnowledgeObjects    SkillKnowledgeObject[]
+  aiSuggestedIn            AiClassification[]        @relation("AiSuggestedKnowledgeObject")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([disciplineId, name])
+  @@index([disciplineId])
+}
+
+model Content {
+  id   String @id @default(uuid())
+  name String @unique
+
+  objectContents ObjectContent[]
+  aiSuggestedIn  AiClassification[] @relation("AiSuggestedContent")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ObjectContent {
+  knowledgeObjectId String
+  contentId         String
+
+  knowledgeObject KnowledgeObject @relation(fields: [knowledgeObjectId], references: [id], onDelete: Cascade)
+  content         Content         @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@id([knowledgeObjectId, contentId])
+  @@index([contentId])
+}
+
+/**
+ * ===================== COMPETENCIES & SKILLS =====================
+ */
+
+model Competency {
+  id          String  @id @default(uuid())
+  areaId      String
+  code        Int
+  description String?
+
+  area   Area    @relation(fields: [areaId], references: [id], onDelete: Restrict)
+  skills Skill[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([areaId, code])
+  @@index([areaId])
+}
+
+model Skill {
+  id           String  @id @default(uuid())
+  competencyId String
+  code         String
+  description  String?
+
+  competency Competency @relation(fields: [competencyId], references: [id], onDelete: Restrict)
+
+  questions             Question[]
+  skillKnowledgeObjects SkillKnowledgeObject[]
+  aiSuggestedIn         AiClassification[]     @relation("AiSuggestedSkill")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([competencyId, code])
+  @@index([competencyId])
+}
+
+model SkillKnowledgeObject {
+  skillId           String
+  knowledgeObjectId String
+
+  relevance  Float?
+  confidence Float?
+  source     String?
+
+  skill           Skill           @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  knowledgeObject KnowledgeObject @relation(fields: [knowledgeObjectId], references: [id], onDelete: Cascade)
+
+  @@id([skillId, knowledgeObjectId])
+  @@index([knowledgeObjectId])
+}
+
+/**
+ * ===================== EXAMS & QUESTIONS =====================
+ */
+
+model Exam {
+  id   String          @id @default(uuid())
+  year Int
+  day  ExamDay
+  type ApplicationType
+
+  questions       Question[]
+  attemptSessions AttemptSession[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([year, day, type], name: "ux_exam_year_app_day")
+  @@index([year])
+}
+
+model Question {
+  id       String   @id @default(uuid())
+  examId   String
+  number   Int
+  area     AreaCode
+  tpLingua Int      @default(-1) //-1 = não se aplica (CH/CN/MT), 0 ingles e 1 espanhol
+
+  skillId String?
+  skill   Skill?  @relation(fields: [skillId], references: [id], onDelete: SetNull)
+
+  rawJson      Json?
+  inepItemCode String? @unique
+
+  exam Exam @relation(fields: [examId], references: [id], onDelete: Cascade)
+
+  blocks       QuestionBlock[]
+  alternatives Alternative[]
+
+  questionDisciplines      QuestionDiscipline[]
+  questionKnowledgeObjects QuestionKnowledgeObject[]
+
+  attemptAnswers      AttemptAnswer[]
+  simulationQuestions SimulationQuestion[]
+  aiClassifications   AiClassification[]
+  inepMicrodata       InepItemMicrodata?   @relation(fields: [inepItemMicrodataId], references: [id])
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  inepItemMicrodataId BigInt?
+
+  // Agora conseguimos ter:
+  // (examId, number=1, tpLingua=0) e (examId, number=1, tpLingua=1)
+  @@unique([examId, number, tpLingua], name: "ux_question_exam_number_lang")
+  @@index([examId])
+  @@index([area])
+  @@index([skillId])
+}
+
+model QuestionBlock {
+  id         String    @id @default(uuid())
+  questionId String
+  type       BlockType
+  order      Int
+
+  text     String?
+  imageUrl String?
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([questionId, order])
+  @@index([questionId])
+}
+
+model Alternative {
+  id         String  @id @default(uuid())
+  questionId String
+  letter     String
+  text       String
+  isCorrect  Boolean @default(false)
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  selectedInAnswers AttemptAnswer[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([questionId, letter])
+  @@index([questionId])
+}
+
+/**
+ * ===================== QUESTION BRIDGES =====================
+ */
+
+model QuestionDiscipline {
+  questionId   String
+  disciplineId String
+
+  question   Question   @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  discipline Discipline @relation(fields: [disciplineId], references: [id], onDelete: Cascade)
+
+  @@id([questionId, disciplineId])
+  @@index([disciplineId])
+}
+
+model QuestionKnowledgeObject {
+  questionId        String
+  knowledgeObjectId String
+
+  question        Question        @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  knowledgeObject KnowledgeObject @relation(fields: [knowledgeObjectId], references: [id], onDelete: Cascade)
+
+  @@id([questionId, knowledgeObjectId])
+  @@index([knowledgeObjectId])
+}
+
+/**
+ * ===================== USERS & SIMULATIONS =====================
+ */
+
+model User {
+  id    String   @id @default(uuid())
+  name  String
+  email String   @unique
+  role  UserRole @default(STUDENT)
+
+  passwordHash String?
+  deletedAt    DateTime?
+
+  simulations      Simulation[]
+  attemptSessions  AttemptSession[]
+  humanValidations HumanValidation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Simulation {
+  id     String @id @default(uuid())
+  userId String
+
+  title   String?
+  filters Json?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  simulationQuestions SimulationQuestion[]
+  attemptSessions     AttemptSession[]
+
+  createdAt DateTime @default(now())
+}
+
+model SimulationQuestion {
+  simulationId String
+  questionId   String
+  order        Int
+
+  simulation Simulation @relation(fields: [simulationId], references: [id], onDelete: Cascade)
+  question   Question   @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@id([simulationId, questionId])
+  @@unique([simulationId, order])
+}
+
+/**
+ * modelo antigo de Attempt sem considerar sessões e respostas
+ * model Attempt {
+ * id           String  @id @default(uuid())
+ * userId       String
+ * questionId   String
+ * simulationId String?
+ * selectedAlternativeId String?
+ * isCorrect             Boolean?
+ * timeSpentMs           Int?
+ * user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+ * question   Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
+ * simulation Simulation? @relation(fields: [simulationId], references: [id], onDelete: SetNull)
+ * createdAt DateTime @default(now())
+ * @@index([userId])
+ * @@index([questionId])
+ * }
+ */
+
+model AttemptSession {
+  id     String @id @default(uuid())
+  userId String
+
+  type   AttemptSessionType
+  status AttemptSessionStatus @default(IN_PROGRESS)
+
+  simulationId String?
+  examId       String?
+
+  title    String?
+  metadata Json?
+
+  totalQuestions    Int @default(0)
+  answeredQuestions Int @default(0)
+  correctQuestions  Int @default(0)
+  wrongQuestions    Int @default(0)
+  skippedQuestions  Int @default(0)
+
+  rawScore    Decimal? @db.Decimal(10, 2)
+  triScore    Decimal? @db.Decimal(10, 2)
+  scoreMethod String?  @default("SIMPLE")
+
+  totalTimeSpentMs Int @default(0)
+
+  startedAt   DateTime  @default(now())
+  correctedAt DateTime?
+  abandonedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  simulation Simulation? @relation(fields: [simulationId], references: [id], onDelete: SetNull)
+  exam       Exam?       @relation(fields: [examId], references: [id], onDelete: SetNull)
+
+  answers AttemptAnswer[]
+
+  @@index([userId])
+  @@index([type])
+  @@index([status])
+  @@index([simulationId])
+  @@index([examId])
+  @@index([startedAt])
+  @@index([correctedAt])
+}
+
+model AttemptAnswer {
+  id               String @id @default(uuid())
+  attemptSessionId String
+  questionId       String
+
+  selectedAlternativeId String?
+  selectedLetter        String? @db.VarChar(5)
+  correctLetter         String? @db.VarChar(10)
+
+  isCorrect        Boolean?
+  correctionStatus AttemptCorrectionStatus @default(PENDING)
+
+  isSkipped Boolean @default(false)
+
+  timeSpentMs     Int  @default(0)
+  reviewCount     Int  @default(0)
+  confidenceLevel Int?
+
+  questionOrder Int?
+
+  answeredAt  DateTime?
+  correctedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  attemptSession      AttemptSession @relation(fields: [attemptSessionId], references: [id], onDelete: Cascade)
+  question            Question       @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  selectedAlternative Alternative?   @relation(fields: [selectedAlternativeId], references: [id], onDelete: SetNull)
+
+  @@unique([attemptSessionId, questionId], name: "ux_attempt_answer_session_question")
+  @@index([attemptSessionId])
+  @@index([questionId])
+  @@index([selectedAlternativeId])
+  @@index([isCorrect])
+  @@index([correctionStatus])
+  @@index([questionOrder])
+}
+
+/**
+ * ===================== AI CLASSIFICATION & VALIDATION =====================
+ */
+
+model AiClassification {
+  id         String @id @default(uuid())
+  questionId String
+
+  modelName    String
+  modelVersion String?
+  confidence   Float?
+  rationale    String?
+
+  suggestedSkillId           String?
+  suggestedDisciplineId      String?
+  suggestedKnowledgeObjectId String?
+  suggestedContentId         String?
+
+  extra     Json?
+  createdAt DateTime @default(now())
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  suggestedSkill           Skill?           @relation("AiSuggestedSkill", fields: [suggestedSkillId], references: [id], onDelete: SetNull)
+  suggestedDiscipline      Discipline?      @relation("AiSuggestedDiscipline", fields: [suggestedDisciplineId], references: [id], onDelete: SetNull)
+  suggestedKnowledgeObject KnowledgeObject? @relation("AiSuggestedKnowledgeObject", fields: [suggestedKnowledgeObjectId], references: [id], onDelete: SetNull)
+  suggestedContent         Content?         @relation("AiSuggestedContent", fields: [suggestedContentId], references: [id], onDelete: SetNull)
+
+  validations HumanValidation[]
+
+  @@index([questionId])
+}
+
+model HumanValidation {
+  id                 String @id @default(uuid())
+  aiClassificationId String
+  validatedByUserId  String
+
+  status      ValidationStatus @default(PENDING)
+  notes       String?
+  validatedAt DateTime?
+
+  aiClassification AiClassification @relation(fields: [aiClassificationId], references: [id], onDelete: Cascade)
+  validatedByUser  User             @relation(fields: [validatedByUserId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+}
